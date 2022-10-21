@@ -1,0 +1,273 @@
+---
+title: "Diabetes Prediction Using ML"
+output: html_notebook
+---
+
+##Diabetes Prediction Using ML Methods.
+
+First, let's import the data. The data was collected in 9 May 1990 from National Institute off Diabetes and Digestive and Kidney Diseases.
+```{r}
+diabetes = read.csv("C:/Users/Tian Laptop/Desktop/Intro To ML/FinalProject/diabetes.csv")
+
+#To better represent the outcome variable. The outcome will be rewrite to factors
+diabetes$Outcome = factor(diabetes$Outcome)
+levels(diabetes$Outcome) = list(No = "0", Yes = "1")
+```
+There are 8 features and 1 outcome variable in the data set:
+*Pregnancies: Number of times pregnant
+*Glucose: Plasma glucose concentration a 2 hours in an oral glucose tolerance test
+*BloodPressure: Diastolic blood pressure (mm Hg)
+*SkinThickness: Triceps skin fold thickness (mm)
+*Insulin: 2-Hour serum insulin (mu U/ml)
+*BMI: Body mass index (weight in kg/(height in m)^2)
+*DiabetesPedigreeFunction: Diabetes pedigree function
+*Age: Age (years)
+*Outcome: whether the patient has diabetes.
+
+```{r}
+str(diabetes)
+summary(diabetes)
+colSums(is.na(diabetes))
+```
+All features in the data set are numerical. The outcome variable, have 500 No and 268 Yes, which implys imbalance. And fortunately, there is no missing values anywhere in the data set.
+
+## Data Exploration and Preprocessing
+
+```{r}
+library(dplyr)
+numeric_attr = names(select_if(diabetes, is.numeric))
+par(mfrows = c(2,4))
+for(column in numeric_attr)
+  plot(diabetes[,column] ~ diabetes$Outcome, ylab = column)
+```
+Based on the side-by-side boxplots, we can tell all features have some levels of association with the outcome variable. Some features shows strong association such as age, pregnancies, Glucose, etc. Some shows weak association such as blood pressure. Therefore, it is necessary to perform statistical tests to look deeper into their associations with outcome.
+
+```{r}
+t_test = function(x, name){
+  t.test(table(x,diabetes$Outcome))
+}
+numeric_attri = diabetes[,c("Pregnancies","Glucose","BloodPressure","SkinThickness","Insulin","BMI","DiabetesPedigreeFunction","Age")]
+
+mapply(t_test,numeric_attri,names(numeric_attri))
+```
+Assuming the alpha-level = 0.05, all features have a p-value smaller than the alpha. This means all features have association with the outcome variable.
+
+At this point, we will use all features in the data set as they all shows association with the outcome variable. The fact that the outcome variable is imbalanced, we will perform up sampling methods to encounter this problem. For ANN method, we will normalize the data so that the ANN model won't returns NaNs.
+
+## Data Analysis and Experimental Results
+
+In this section we will try multiple ML methods to compare the results. Starting with some simple ML models.
+
+Split the data for training and testing
+```{r}
+set.seed(1)
+library(caret)
+
+intrain = createDataPartition(diabetes$Outcome, p =0.8, list=FALSE)
+diabetes_train = diabetes[intrain,]
+diabetes_test = diabetes[-intrain,]
+```
+
+### KNN Model
+```{r}
+set.seed(1)
+ctrl_knn = trainControl(method = "cv", number = 10, classProbs = TRUE, summaryFunction = twoClassSummary, sampling = "smote")
+grid_knn = expand.grid(k = c(1,5,10,15,20,25,30))
+knn_model = train(Outcome~., data = diabetes_train, method = "knn", metric = "ROC", trControl = ctrl_knn, tuneGrid = grid_knn)
+
+knn_model
+```
+Based on the ROC value, the best KNN model use k = 20 which returns a ROC value of 0.789.
+```{r}
+library(ROCR)
+pred_knn = predict(knn_model, diabetes_test, type = "prob")
+pred_knn = prediction(pred_knn$Yes, diabetes_test$Outcome)
+knn_AUC = performance(pred_knn, measure = "auc")@y.values
+knn_AUC
+knn_label = predict(knn_model, diabetes_test)
+confusionMatrix(knn_label, diabetes_test$Outcome, mode = "everything", pos="Yes")
+```
+Our model used SMOTE up sampling. Therefore, we will look at the AUC and accuracy to evaluate the model performance. The AUC of our KNN model on the test data is 0.816 which was not terrible but also didn't do very well. The accuracy is 0.7386 which is a little bit higher than the No Information model. This also indicates the model did not deliver excellent result. 
+
+### Random Forest Model                                 
+```{r}
+set.seed(1)
+crtl_rf = trainControl(method = "cv", number = 10, classProbs = TRUE, summaryFunction = twoClassSummary, sampling = "smote" )
+grid_rf = expand.grid(mtry = c(2,4,6,8,10))
+rf_model = train(Outcome~., data = diabetes_train, trControl = crtl_rf, method = "rf", metric = "ROC", tuneGrid = grid_rf)
+rf_model
+
+```
+Our random forest model used mtry=2 which returns a ROC of 0.813 on the validation data.
+
+```{r}
+pred_rf = predict(rf_model, diabetes_test, type = "prob")
+pred_rf = prediction(pred_rf$Yes, diabetes_test$Outcome)
+AUC_rf = performance(pred_rf, measure="auc")@y.values
+AUC_rf
+rf_label = predict(rf_model, diabetes_test)
+confusionMatrix(rf_label, diabetes_test$Outcome, mode = "everything", pos="Yes")
+```
+Our best rf model returns a ROC of 0.8545 on the test data, which was a little bit better than the KNN model but is still not very satisfactory. The accuracy was also improved from KNN model, 0.7647, which is about 10% better than the No Information model. However, this does not indicate the model delivered a satisfactory result.
+
+### Elastic Net Model
+```{r}
+set.seed(1)
+crtl_enet = trainControl(method = "cv", number = 10, classProbs = TRUE, summaryFunction = twoClassSummary, sampling = "smote")
+grid_enet = expand.grid(alpha = seq(0,1,length=10), lambda = 10^seq(-2,2, length = 100))
+enet_model = train(Outcome~., data = diabetes_train, trControl = crtl_enet, method = "glmnet", metric = "ROC", tuneGrid = grid_enet)
+```
+The enet model used alpha = 0.3333 and lambda = 0.0159 for the best model that deliver the best ROC value.
+
+```{r}
+pred_enet = predict(enet_model, diabetes_test, type = "prob")
+pred_enet = prediction(pred_enet$Yes, diabetes_test$Outcome)
+AUC_enet = performance(pred_enet, measure = "auc")@y.values
+AUC_enet
+
+enet_label = predict(enet_model, diabetes_test)
+confusionMatrix(enet_label, diabetes_test$Outcome, mode = "everything", pos="Yes")
+```
+The elastic net model delivered a ROC of 0.821, which was just a tiny bit better than the KNN model. The accuracy of the enet mdoel was 0.732. There is no sign of a better performance here.
+
+### Gradient Boosting Method
+```{r}
+crtl_gbm = trainControl(method = "cv", number =10, classProbs = TRUE, summaryFunction = twoClassSummary, sampling = "smote")
+grid_gbm = expand.grid(n.trees = c(50,100,150,200), interaction.depth = c(1,2,3,4), shrinkage = c(0.1,0.05),n.minobsinnode = c(5,10,15))
+gbm_model = train(Outcome~., data = diabetes_train, trControl = crtl_enet, method = "gbm", metric = "ROC", tuneGrid = grid_gbm)
+```
+The final tuning combination used for the model were n.trees = 100, interaction.depth = 1, shrinkage = 0.1 and n.minobsinnode = 5. It returned ROC = 0.8358225 on the validation data.
+ 
+```{r}
+pred_gbm = predict(gbm_model, diabetes_test, type = "prob")
+pred_gbm = prediction(pred_gbm$Yes, diabetes_test$Outcome)
+AUC_gbm = performance(pred_gbm, measure = "auc")@y.values
+AUC_gbm
+
+gbm_label = predict(gbm_model, diabetes_test)
+confusionMatrix(gbm_label, diabetes_test$Outcome, mode = "everything", pos = "Yes")
+```
+The gridient boosting method returns a ROC of 0.8543 on the test data which is very close to the random forest model. The accuracy is 0.7647 which is about 11% better than the No Information model. 
+
+###Comparsion for Simple Models
+```{r}
+compare = resamples(list(KNN=knn_model, RF=rf_model, ENet=enet_model, GBM = gbm_model))
+summary(compare)
+```
+Comparing the simple models, the gradients boosting method deliver the best mean ROC value of 0.8358. The highest of it can reach up to 0.902 which can be considered well-performed. Despite the elastic net model got the 2nd place in the mean ROC, it is very close to the gbm model. The highest ROC of enet model can reach 0.904 at maxium. This is the highest out of all the models. Now, let's take a look at the more complex model, artificial neural network model(ANN).
+
+### ANN Model
+Let's further split the training data into train and validation sets.
+```{r}
+#before spliting, let's convert the outcome variable to 0 and 1 indices
+diabetes_train$Outcome = as.numeric(diabetes_train$Outcome)-1
+diabetes_test$Outcome = as.numeric(diabetes_test$Outcome)-1
+
+set.seed(1)
+intrain_ann = createDataPartition(diabetes_train$Outcome, p = 0.8, list = FALSE)
+ann_train = diabetes_train[intrain_ann,-9]
+ann_train_label = diabetes_train[intrain_ann,9]
+
+ann_val = diabetes_train[-intrain_ann,-9]
+ann_val_label = diabetes_train[-intrain_ann,9]
+
+#split apart the test labels for later use.
+test_label = diabetes_test[,9]
+diabetes_test$Outcome = NULL
+```
+
+To fight the imbalance, the method of assigning class weight could be helpful. 
+```{r}
+t = table(ann_train_label)
+w_yes = sum(t)/(t["1"]*2)
+w_no = sum(t)/(t["0"]*2)
+w_yes
+w_no
+```
+Before running the ANN model, it's necessary to normalize our data and convert the outcome variable.
+```{r}
+col_mean_train = attr(scale(ann_train[numeric_attr]), "scaled:center")
+col_std_train = attr(scale(ann_train[numeric_attr]),"scaled:scale")
+
+ann_train[numeric_attr] = scale(ann_train[numeric_attr])
+ann_val[numeric_attr] = scale(ann_val[numeric_attr], center = col_mean_train, scale = col_std_train)
+diabetes_test[numeric_attr] = scale(diabetes_test[numeric_attr], center = col_mean_train, scale = col_std_train)
+```
+
+
+Let's use a tfruns to tune the hyper-parameters for the ANN model. This will help us get a better model for our data.
+```{r}
+library(tfruns)
+runs = tuning_run("flags.R",
+                  flags = list(
+                    lr = c(0.005,0.01,0.02),
+                    epoch = c(25,35,40),
+                    batch_size = c(8,16),
+                    activation_function = c("relu","sigmoid","tanh"),
+                    units1 = c(32,64,128),
+                    units2 = c(32,64,128)
+                    #dropout1 = c(0.2,0.45),
+                    #dropout2 = c(0.2,0.45)
+                  ),
+                  sample = 0.08
+  
+)
+```
+
+```{r}
+all_runs = runs[order(runs$metric_val_acc, decreasing = TRUE),]
+all_runs
+view_run(all_runs$run_dir[1])
+```
+
+With class weight assigning method, our best ANN model choose:
+*units1 = 64
+*units2 = 64
+*batch_size = 16
+*epoch = 35
+*learning rate = 0.01
+*activation = sigmoid
+and delivered val_accuracy of 0.7967 on the validation data. 
+
+
+Let's take a look at how the ANN model perform
+```{r}
+ann_train = rbind(ann_train, ann_val)
+ann_train_label = append(ann_train_label, ann_val_label)
+
+set.seed(1)
+ann_model = keras_model_sequential() %>%
+  layer_dense(units = 64, input_shape = dim(ann_train)[2], activation = "sigmoid") %>%
+  layer_dense(units = 64, activation = "sigmoid") %>%
+  layer_dense(units = 1, activation = "sigmoid")
+
+ann_model %>% compile(
+  loss = "binary_crossentropy",
+  optimizer = optimizer_adam(learning_rate = 0.01),
+  metrics = "acc"
+)
+
+ann_model %>% fit(
+  as.matrix(ann_train),
+  ann_train_label,
+  batch_size = 16,
+  epoch = 35,
+  verbose = 2,
+  validation_data = list(as.matrix(diabetes_test),test_label),
+  class_weight = list("0"=w_no, "1"=w_yes)
+)
+```
+
+```{r}
+ann_prob = ann_model %>% predict(as.matrix(diabetes_test))
+pred_ann = prediction(ann_prob, test_label)
+performance(pred_ann, measure = "auc")@y.values
+```
+
+```{r}
+pred_ann_label = factor(ifelse(ann_prob>0.5, "1","0"))
+confusionMatrix(pred_ann_label, as.factor(test_label), mode="everything", positive = "1")
+```
+
+Comparing with other models, the ANN model deliver the lowest recall of 0.5849 and the lowest F1 of 0.6139. The precision, 0.6458, is higher than the KNN, enet and gbm model. The ROC value it got was 0.8257 which is higher than the KNN and random forest model. The ANN model tuning was computationally expensive, we have only tried 8% of all the combinations of hyper-perameters. There could still be some potential in the ANN model. 
+Overall, the gbm model trained using SMOTE delivered the highest ROC while maintaing the highest F1 for our dataset. 
